@@ -1,6 +1,6 @@
-expname = mutant
-basedir = debuglogs
-datadir = /home/rayne/datasets/dnerf/mutant
+expname = watercube6
+basedir = logs
+datadir = /home/rayne/datasets/dnerf/watercube6
 dataset_type = blender
 
 nerf_type = direct_temporal
@@ -25,6 +25,5 @@ precrop_frac = 0.5
 half_res = True
 do_half_precision = False
 
-
-near = 2.
-far = 6.
+near = 9.
+far = 13.

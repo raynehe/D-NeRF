@@ -8,3 +8,6 @@
 *.zip
 data/*
 logs/*
+pretrained_logs/*
+.vscode/*
+debuglogs/*

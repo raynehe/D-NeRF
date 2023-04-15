@@ -13,6 +13,7 @@ try:
     from apex import amp
 except ImportError:
     pass
+from torch.nn import functional
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
@@ -70,6 +71,7 @@ def run_network(inputs, viewdirs, frame_time, fn, embed_fn, embeddirs_fn, embedt
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
     outputs_flat, position_delta_flat = batchify(fn, netchunk)(embedded, embedded_times)
+    # print('position_delta_flat.shape', position_delta_flat.shape)
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     position_delta = torch.reshape(position_delta_flat, list(inputs.shape[:-1]) + [position_delta_flat.shape[-1]])
     return outputs, position_delta
@@ -182,6 +184,7 @@ def render_path(render_poses, render_times, hwf, chunk, render_kwargs, gt_imgs=N
     disps = []
 
     for i, (c2w, frame_time) in enumerate(zip(tqdm(render_poses), render_times)):
+        # print('render_times',render_times)
         rgb, disp, acc, _ = render(H, W, focal, chunk=chunk, c2w=c2w[:3,:4], frame_time=frame_time, **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
@@ -189,10 +192,12 @@ def render_path(render_poses, render_times, hwf, chunk, render_kwargs, gt_imgs=N
         if savedir is not None:
             rgb8_estim = to8b(rgbs[-1])
             filename = os.path.join(save_dir_estim, '{:03d}.png'.format(i+i_offset))
+            # filename  'logs/mutant/renderonly_test_799999/estim/000.png'
             imageio.imwrite(filename, rgb8_estim)
             if save_also_gt:
                 rgb8_gt = to8b(gt_imgs[i])
                 filename = os.path.join(save_dir_gt, '{:03d}.png'.format(i+i_offset))
+                # filename  'logs/mutant/renderonly_test_799999/gt/000.png'
                 imageio.imwrite(filename, rgb8_gt)
 
     rgbs = np.stack(rgbs, 0)
@@ -450,9 +455,11 @@ def render_rays(ray_batch,
             z_samples = z_samples.detach()
             z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
 
+    rays_d = functional.normalize(rays_d,p=1,dim=1)
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
     run_fn = network_fn if network_fine is None else network_fine
     raw, position_delta = network_query_fn(pts, viewdirs, frame_time, run_fn)
+    # print('position_delta', position_delta.shape)
     rgb_map, disp_map, acc_map, weights, _ = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map, 'z_vals' : z_vals,
@@ -524,6 +531,8 @@ def config_parser():
                         help='specific weights npy file to reload for coarse network')
 
     # rendering options
+    parser.add_argument("--near", type=float, help='near bound of the ray')
+    parser.add_argument("--far", type=float, help='far bound of the ray')
     parser.add_argument("--N_samples", type=int, default=64, 
                         help='number of coarse samples per ray')
     parser.add_argument("--not_zero_canonical", action='store_true',
@@ -617,10 +626,11 @@ def train():
     if args.dataset_type == 'blender':
         images, poses, times, render_poses, render_times, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
+        # Loaded blender (300, 200, 200, 4) torch.Size([40, 4, 4]) [200, 200, 612.9324165538827] /home/rayne/datasets/dnerf/watercube/view_1
         i_train, i_val, i_test = i_split
 
-        near = 2.
-        far = 6.
+        near = args.near
+        far = args.far
 
         if args.white_bkgd:
             images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
@@ -875,6 +885,13 @@ def train():
             print('Saved checkpoints at', path)
 
         if i % args.i_print == 0:
+            # add delta x to tensorboard
+            if 'position_delta' in extras:
+                writer.add_scalar('delta_x', extras['position_delta'].mean().item(), i)
+                writer.add_scalar('delta_x_std', extras['position_delta'].std().item(), i)
+                if 'position_delta_0' in extras:
+                    writer.add_scalar('delta_x0', extras['position_delta_0'].mean().item(), i)
+                    writer.add_scalar('delta_x0_std', extras['position_delta_0'].std().item(), i)
             tqdm_txt = f"[TRAIN] Iter: {i} Loss_fine: {img_loss.item()} PSNR: {psnr.item()}"
             if args.add_tv_loss:
                 tqdm_txt += f" TV: {tv_loss.item()}"
